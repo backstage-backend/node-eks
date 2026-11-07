@@ -1,0 +1,105 @@
+name: Continuous Delivery
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  TF_STATE_KEY: services/node-eks/kubernetes.tfstate
+  DEPLOYMENT: kubernetes
+
+jobs:
+  deploy:
+    name: deploy-kubernetes
+    runs-on: ubuntu-latest
+    environment: aws-infrastructure
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+
+
+
+
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish image
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
+        run: |
+          docker build --tag "$IMAGE" .
+          docker push "$IMAGE"
+
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+
+      - name: Terraform init
+        working-directory: terraform
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          TF_VAR_api_gateway_name: ${{ vars.API_GATEWAY_NAME }}
+          TF_VAR_eks_cluster_name: ${{ vars.EKS_CLUSTER_NAME }}
+        run: |
+          test -n "$TF_STATE_BUCKET" || { echo "::error::TF_STATE_BUCKET is required"; exit 1; }
+          test -n "$TF_VAR_aws_region" || { echo "::error::AWS_REGION is required"; exit 1; }
+          if [ "$DEPLOYMENT" = "lambda" ]; then
+            test -n "$TF_VAR_api_gateway_name" || { echo "::error::API_GATEWAY_NAME is required"; exit 1; }
+          else
+            test -n "$TF_VAR_eks_cluster_name" || { echo "::error::EKS_CLUSTER_NAME is required"; exit 1; }
+          fi
+          terraform init \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=$TF_STATE_KEY" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="encrypt=true"
+
+
+
+      - name: Terraform apply
+        working-directory: terraform
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          TF_VAR_api_gateway_name: ${{ vars.API_GATEWAY_NAME }}
+          TF_VAR_eks_cluster_name: ${{ vars.EKS_CLUSTER_NAME }}
+        run: |
+          if [ "$DEPLOYMENT" = "lambda" ]; then
+            terraform apply -auto-approve
+          else
+            terraform apply -auto-approve -var="container_image=$IMAGE"
+          fi
+
+
+      - name: Configure kubectl
+        env:
+          EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+        run: aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
+
+      - name: Apply Kubernetes manifests
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
+        run: |
+          sed "s#CONTAINER_IMAGE#$IMAGE#g" k8s/deployment.yaml | kubectl apply -f -
+          kubectl apply -f k8s/service.yaml
+          kubectl rollout status deployment/node-eks --namespace default --timeout=5m
+

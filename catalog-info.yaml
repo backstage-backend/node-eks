@@ -1,0 +1,26 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: node-eks
+  description: Prueba de integración entre Backstage y GitHub
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+spec:
+  type: service
+  lifecycle: experimental
+  owner: group:default/Integraciones
+  providesApis:
+    - node-eks-api
+
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: node-eks-api
+  description: API for node-eks
+spec:
+  type: openapi
+  lifecycle: experimental
+  owner: group:default/Integraciones
+  definition:
+    $text: ./docs/openapi.yaml

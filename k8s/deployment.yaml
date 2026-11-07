@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: node-eks
+  namespace: default
+  labels:
+    app: node-eks
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: node-eks
+  template:
+    metadata:
+      labels:
+        app: node-eks
+    spec:
+      containers:
+        - name: node-eks
+          image: CONTAINER_IMAGE
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
